@@ -2,17 +2,24 @@
 
 import os
 from fastapi.testclient import TestClient
-from main import app, EXPECTED_API_KEY as MAIN_EXPECTED_API_KEY # Import your FastAPI app instance and EXPECTED_API_KEY
+from main import app # Only import the app
+import os # Add os import
+from dotenv import load_dotenv # Add dotenv import
 import pytest
 from openai.resources.chat import completions as openai_chat_completions
 
+# test_main.py
+# ... imports ...
+
+load_dotenv() # Ensure .env is loaded for tests too (for local consistency)
+VALID_TEST_API_KEY = os.getenv("MY_APP_API_KEY") 
+# This will now be the key that tests use, and it should match what main.py's
+# get_api_key dependency expects if the environment is set up correctly.
+
+# ... rest of the test file (TestClient setup, test functions) ...
+
 # Test Client Setup
 client = TestClient(app)
-
-# test_main.py
-# ...
-TEST_USER_API_KEY = "test_dummy_app_api_key_for_pytest" # This is just for test clarity
-# The actual validation will use EXPECTED_API_KEY loaded from environment by main.py
 
 # Define a key that our tests will use. For tests to pass against the actual
 # get_api_key dependency, the environment running pytest needs MY_APP_API_KEY
@@ -27,7 +34,7 @@ TEST_USER_API_KEY = "test_dummy_app_api_key_for_pytest" # This is just for test 
 # Let's use the actual key expected by the app for valid test cases.
 # Ensure your .env file has MY_APP_API_KEY set when running tests locally.
 # If MAIN_EXPECTED_API_KEY is None (not set in .env), these tests requiring auth will behave accordingly.
-VALID_TEST_API_KEY = MAIN_EXPECTED_API_KEY # Use the one loaded by main.py
+#VALID_TEST_API_KEY = MAIN_EXPECTED_API_KEY # Use the one loaded by main.py
 
 # --- Test Functions ---
 
