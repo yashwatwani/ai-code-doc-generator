@@ -1,40 +1,22 @@
-# test_main.py
-
 import os
+from dotenv import load_dotenv
 from fastapi.testclient import TestClient
-from main import app # Only import the app
-import os # Add os import
-from dotenv import load_dotenv # Add dotenv import
+from main import app # Only import the app for TestClient
 import pytest
 from openai.resources.chat import completions as openai_chat_completions
+import main as main_module # Import main as a module to access/patch its globals
 
-# test_main.py
-# ... imports ...
-
-load_dotenv() # Ensure .env is loaded for tests too (for local consistency)
-VALID_TEST_API_KEY = os.getenv("MY_APP_API_KEY") 
-# This will now be the key that tests use, and it should match what main.py's
-# get_api_key dependency expects if the environment is set up correctly.
-
-# ... rest of the test file (TestClient setup, test functions) ...
+# Load .env for local test runs to pick up MY_APP_API_KEY for VALID_TEST_API_KEY
+# and OPENAI_API_KEY for the app's client initialization (though mocked for some tests).
+load_dotenv() 
 
 # Test Client Setup
 client = TestClient(app)
 
-# Define a key that our tests will use. For tests to pass against the actual
-# get_api_key dependency, the environment running pytest needs MY_APP_API_KEY
-# to be set to this value, or we need to mock get_api_key.
-# Let's assume the environment will provide it for now for integration-style testing of the auth.
-# If EXPECTED_API_KEY is not set in the environment main.py runs in, main.py's get_api_key will raise 500.
-# For pure unit testing of generate_docs logic, we'd mock get_api_key itself.
-# For now, we test the integration WITH the auth dependency.
-# We will need to ensure MY_APP_API_KEY is set in the CI environment.
-# For local testing, your .env should already be setting MY_APP_API_KEY.
-
-# Let's use the actual key expected by the app for valid test cases.
-# Ensure your .env file has MY_APP_API_KEY set when running tests locally.
-# If MAIN_EXPECTED_API_KEY is None (not set in .env), these tests requiring auth will behave accordingly.
-#VALID_TEST_API_KEY = MAIN_EXPECTED_API_KEY # Use the one loaded by main.py
+# This key is used by tests when sending requests requiring valid auth.
+# It reads MY_APP_API_KEY from the environment, same as main.py does for EXPECTED_API_KEY.
+# Ensures tests align with how the app itself determines the expected key.
+VALID_TEST_API_KEY = os.getenv("MY_APP_API_KEY")
 
 # --- Test Functions ---
 
@@ -62,8 +44,8 @@ def test_generate_documentation_success_with_auth(monkeypatch):
         def __init__(self, content="Mocked AI Documentation"): self.choices = [MockChoice(content)]
 
     def mock_openai_completions_create(*args, **kwargs):
-        print("Mocked OpenAI completions.create called")
-        return MockCompletion(content="""/** Mocked JSDoc */""")
+        # print("Mocked OpenAI completions.create called") # Keep for debugging if needed
+        return MockCompletion(content="""/** Mocked JSDoc for test */""")
 
     monkeypatch.setattr(openai_chat_completions.Completions, "create", mock_openai_completions_create)
 
@@ -71,25 +53,24 @@ def test_generate_documentation_success_with_auth(monkeypatch):
     test_payload = {"code": "function test() {}", "language": "javascript"}
     response = client.post("/generate-documentation/", json=test_payload, headers=headers)
 
-    assert response.status_code == 200
+    assert response.status_code == 200, f"Response: {response.text}"
     response_data = response.json()
     assert response_data["message"] == "Documentation generated successfully."
-    assert "Mocked JSDoc" in response_data["generated_documentation"]
+    assert "Mocked JSDoc for test" in response_data["generated_documentation"]
 
 def test_generate_documentation_no_api_key():
     """Test request to protected endpoint without API key."""
     test_payload = {"code": "function test() {}", "language": "javascript"}
     response = client.post("/generate-documentation/", json=test_payload)
-    # APIKeyHeader with auto_error=True should result in 403 if header is missing
-    assert response.status_code == 403 
-    assert "not authenticated" in response.json().get("detail", "").lower() # Or similar default message
+    assert response.status_code == 403
+    assert response.json().get("detail") == "Not authenticated: X-API-Key header missing."
 
 def test_generate_documentation_wrong_api_key():
     """Test request to protected endpoint with an incorrect API key."""
-    if not VALID_TEST_API_KEY: # If no valid key is configured, this test's premise is harder to check
-        pytest.skip("MY_APP_API_KEY is not set; cannot reliably test 'wrong key' scenario this way.")
+    if not VALID_TEST_API_KEY: 
+        pytest.skip("MY_APP_API_KEY is not set; cannot reliably test 'wrong key' if no 'correct' key is defined.")
 
-    headers = {"X-API-Key": "WRONG_KEY_12345"}
+    headers = {"X-API-Key": "THIS_IS_A_VERY_WRONG_KEY_12345"}
     test_payload = {"code": "function test() {}", "language": "javascript"}
     response = client.post("/generate-documentation/", json=test_payload, headers=headers)
     assert response.status_code == 403
@@ -97,27 +78,34 @@ def test_generate_documentation_wrong_api_key():
 
 def test_generate_documentation_server_key_not_configured(monkeypatch):
     """
-    Test scenario where the server might not have EXPECTED_API_KEY configured.
-    This requires monkeypatching os.getenv for EXPECTED_API_KEY within the app's context for this test.
-    Alternatively, we can rely on the actual `get_api_key` to raise this.
-    If we ensure MY_APP_API_KEY is *not* set in the env for *this specific test*, it would also work.
-    Let's try by temporarily unsetting what main.py's EXPECTED_API_KEY would see.
+    Test scenario where the server's EXPECTED_API_KEY is not configured (is None).
     """
-    # Temporarily make the app believe EXPECTED_API_KEY is not set
-    monkeypatch.setattr("main.EXPECTED_API_KEY", None)
+    # Store original value of main_module.EXPECTED_API_KEY if it exists
+    # The `object()` is a sentinel to detect if the attribute existed at all.
+    original_expected_key_value = getattr(main_module, 'EXPECTED_API_KEY', object())
     
-    # We still need to send *some* X-API-Key to get past the initial APIKeyHeader check
-    headers = {"X-API-Key": "any_key_as_header_is_present"} 
+    # Temporarily set the EXPECTED_API_KEY global in the main module to None
+    # This simulates the state where os.getenv("MY_APP_API_KEY") returned None in main.py
+    main_module.EXPECTED_API_KEY = None
+    
+    # We must send an X-API-Key header to pass the initial check in get_api_key
+    # (the `if api_key_header is None:` check). The value of this header doesn't matter here.
+    headers = {"X-API-Key": "any_key_will_do_as_header_must_be_present"}
     test_payload = {"code": "function test() {}", "language": "javascript"}
+    
     response = client.post("/generate-documentation/", json=test_payload, headers=headers)
     
+    # Restore the original value to avoid affecting other tests
+    if original_expected_key_value is not object(): # If it was a real attribute
+        main_module.EXPECTED_API_KEY = original_expected_key_value
+    else: # It was not an attribute before our test set it to None, so try to remove it.
+          # This case should ideally not happen if main.py always defines EXPECTED_API_KEY.
+        if hasattr(main_module, 'EXPECTED_API_KEY'):
+             delattr(main_module, 'EXPECTED_API_KEY') # Clean up if we created it
+
     assert response.status_code == 500
     assert response.json().get("detail") == "API Key not configured on server."
-    
-    # Important: Restore for other tests if monkeypatching a global like this,
-    # though pytest typically isolates monkeypatch effects per test.
-    # For module-level globals, it's safer to ensure it's restored or a fresh import is used.
-    # However, since MAIN_EXPECTED_API_KEY is imported at the start, this change is isolated.
+
 
 def test_generate_documentation_missing_code_with_auth():
     """Test validation error (missing code field) even with valid API key."""
@@ -125,16 +113,19 @@ def test_generate_documentation_missing_code_with_auth():
         pytest.skip("MY_APP_API_KEY is not set in the environment; skipping auth-dependent test.")
 
     headers = {"X-API-Key": VALID_TEST_API_KEY}
-    response = client.post("/generate-documentation/", json={"language": "python"}, headers=headers) # Missing 'code'
-    assert response.status_code == 422
+    # Sending request missing the 'code' field
+    response = client.post("/generate-documentation/", json={"language": "python"}, headers=headers) 
+    
+    assert response.status_code == 422 # Pydantic validation error
     response_data = response.json()
     assert "detail" in response_data
     found_code_error = False
     for error_item in response_data.get("detail", []):
         loc = error_item.get("loc", [])
-        msg = error_item.get("msg", "")
+        # msg = error_item.get("msg", "") # msg can vary slightly
         error_type = error_item.get("type", "")
-        if "code" in loc and ("missing" in error_type.lower() or "field required" in msg.lower()):
+        # Check if 'code' is in the location and type indicates a missing field
+        if "code" in loc and "missing" in error_type.lower():
             found_code_error = True
             break
-    assert found_code_error, "Error detail for missing 'code' field not found"
+    assert found_code_error, f"Error detail for missing 'code' field not found in {response_data.get('detail')}"

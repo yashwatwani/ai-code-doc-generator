@@ -1,51 +1,80 @@
-import os # For accessing environment variables
-from fastapi import FastAPI, HTTPException # Import HTTPException
+import os
+from fastapi import FastAPI, HTTPException, Security
+from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
-from openai import OpenAI # Import the OpenAI client
-from dotenv import load_dotenv # Import dotenv
+from openai import OpenAI
+from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Initialize the OpenAI client
-# It will automatically look for the OPENAI_API_KEY environment variable
+# --- Environment Variables ---
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+EXPECTED_API_KEY = os.getenv("MY_APP_API_KEY") # Used by get_api_key dependency
+
+# --- OpenAI Client Initialization ---
 try:
-    client = OpenAI()
+    if not OPENAI_API_KEY:
+        # This check is for app startup. If key is missing, client won't be functional.
+        print("Warning: OPENAI_API_KEY environment variable not set. OpenAI client will not be functional.")
+        client = None
+    else:
+        client = OpenAI(api_key=OPENAI_API_KEY)
 except Exception as e:
-    # Handle cases where API key might not be set or other initialization errors
     print(f"Error initializing OpenAI client: {e}")
     client = None
 
 
-# Define a Pydantic model for the request body
+# --- API Key Authentication Setup ---
+API_KEY_NAME = "X-API-Key"
+# Set auto_error to False to handle missing header explicitly in get_api_key
+api_key_header_auth = APIKeyHeader(name=API_KEY_NAME, auto_error=False) 
+
+async def get_api_key(api_key_header: str | None = Security(api_key_header_auth)):
+    """
+    Dependency that checks for a valid API key in the X-API-Key header.
+    """
+    if api_key_header is None: # Manually check if header was provided
+        raise HTTPException(status_code=403, detail="Not authenticated: X-API-Key header missing.")
+
+    # This EXPECTED_API_KEY is the module-level global from above
+    if not EXPECTED_API_KEY: 
+        # This means the server itself is misconfigured (MY_APP_API_KEY not in .env)
+        raise HTTPException(status_code=500, detail="API Key not configured on server.")
+    
+    if api_key_header == EXPECTED_API_KEY:
+        return api_key_header
+    else:
+        raise HTTPException(
+            status_code=403, detail="Could not validate credentials"
+        )
+
+# --- Pydantic Models ---
 class CodeInput(BaseModel):
     code: str
     language: str | None = None
 
-# Define a Pydantic model for the response body
 class DocumentationOutput(BaseModel):
     message: str
     original_code: str
     generated_documentation: str | None = None
 
+# --- FastAPI App Instance ---
 app = FastAPI()
 
+# --- API Endpoints ---
 @app.get("/")
 async def read_root():
     return {"message": "Welcome to the AI Code Documentation Generator API"}
 
-@app.post("/generate-documentation/", response_model=DocumentationOutput)
+@app.post("/generate-documentation/", response_model=DocumentationOutput, dependencies=[Security(get_api_key)])
 async def generate_docs(input_data: CodeInput):
-    # main.py (inside the generate_docs function)
-
-    # ... (input_data: CodeInput) ...
     if not client:
-        raise HTTPException(status_code=500, detail="OpenAI client not initialized. Check API key.")
+        # This means OpenAI client couldn't initialize (e.g., missing OPENAI_API_KEY or invalid key format)
+        raise HTTPException(status_code=500, detail="OpenAI client not initialized. Check server configuration for OpenAI API key.")
 
     language = input_data.language.lower() if input_data.language else "unknown"
     code_snippet = input_data.code
-
-    # --- START MODIFIED PROMPT SECTION ---
+    
     prompt_parts = [
         "You are an expert programmer tasked with generating high-quality, structured documentation for code.",
         f"The language of the code is: {language}.",
@@ -90,32 +119,25 @@ async def generate_docs(input_data: CodeInput):
     
     prompt_parts.append("\nBe precise and do not add any conversational fluff or explanations outside the documentation block itself.")
     prompt = "\n".join(prompt_parts)
-    # --- END MODIFIED PROMPT SECTION ---
-
 
     try:
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a precise code documentation generator."}, # System role can also be refined
+                {"role": "system", "content": "You are a precise code documentation generator."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.2 # Slightly lower for more structured output
+            temperature=0.2
         )
         generated_doc = completion.choices[0].message.content.strip()
-        # Optional: Add a simple cleanup if the model sometimes includes the ``` code block markers
+        
         if generated_doc.startswith("```") and generated_doc.endswith("```"):
             lines = generated_doc.split('\n')
-            if len(lines) > 2: # Ensure there's content between the markers
-                # Remove first line (e.g., ```python) and last line (```)
+            if len(lines) > 2:
                 cleaned_doc_lines = lines[1:-1]
-                # Check if the first line of the supposed doc is actually the docstring/comment start
-                # This check is naive and might need refinement
                 if not (cleaned_doc_lines[0].strip().startswith('"""') or cleaned_doc_lines[0].strip().startswith('/**')):
-                    # If the model just wrapped its output in triple backticks without the language specifier on the first line
-                    pass # Keep as is, the strip() might have handled it.
+                    pass
                 generated_doc = "\n".join(cleaned_doc_lines).strip()
-
 
         return DocumentationOutput(
             message="Documentation generated successfully.",
@@ -123,5 +145,7 @@ async def generate_docs(input_data: CodeInput):
             generated_documentation=generated_doc
         )
     except Exception as e:
-        print(f"Error calling OpenAI API: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate documentation from AI: {str(e)}")
+        # Log the actual error for server-side debugging
+        print(f"Error during OpenAI API call: {type(e).__name__} - {str(e)}")
+        # Return a generic error to the client
+        raise HTTPException(status_code=503, detail="AI service unavailable or encountered an error.")
