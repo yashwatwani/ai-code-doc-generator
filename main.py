@@ -36,40 +36,92 @@ async def read_root():
 
 @app.post("/generate-documentation/", response_model=DocumentationOutput)
 async def generate_docs(input_data: CodeInput):
+    # main.py (inside the generate_docs function)
+
+    # ... (input_data: CodeInput) ...
     if not client:
         raise HTTPException(status_code=500, detail="OpenAI client not initialized. Check API key.")
 
-    language_context = f"for the following {input_data.language or 'code'} snippet" if input_data.language else "for the following code snippet"
+    language = input_data.language.lower() if input_data.language else "unknown"
+    code_snippet = input_data.code
 
-    prompt = f"""
-    You are an expert programmer tasked with generating clear and concise documentation for code.
-    Generate a brief documentation string or comment block {language_context}:
+    # --- START MODIFIED PROMPT SECTION ---
+    prompt_parts = [
+        "You are an expert programmer tasked with generating high-quality, structured documentation for code.",
+        f"The language of the code is: {language}.",
+        "Analyze the following code snippet:",
+        f"```\n{code_snippet}\n```",
+        "\nGenerate documentation that includes:",
+        "1. A concise summary of what the function/code does.",
+        "2. A description of its parameters (name, type, description), if any.",
+        "3. A description of what it returns (type, description), if any."
+    ]
 
-    ```
-    {input_data.code}
-    ```
+    if language == "python":
+        prompt_parts.extend([
+            "\nFor Python, format the documentation as a standard PEP 257 multiline docstring.",
+            "Example for Python:",
+            "\"\"\"",
+            "Summary of the function.",
+            "",
+            "Args:",
+            "    param_name (param_type): Description of the parameter.",
+            "",
+            "Returns:",
+            "    return_type: Description of the return value.",
+            "\"\"\""
+        ])
+    elif language == "javascript":
+        prompt_parts.extend([
+            "\nFor JavaScript, format the documentation as a JSDoc comment block.",
+            "Example for JavaScript:",
+            "/**",
+            " * Summary of the function.",
+            " *",
+            " * @param {param_type} param_name - Description of the parameter.",
+            " * @returns {return_type} Description of the return value.",
+            " */"
+        ])
+    else:
+        prompt_parts.extend([
+            "\nFor this language, use a standard block comment style appropriate for the language.",
+            "Focus on clarity and completeness regarding summary, parameters, and return values."
+        ])
+    
+    prompt_parts.append("\nBe precise and do not add any conversational fluff or explanations outside the documentation block itself.")
+    prompt = "\n".join(prompt_parts)
+    # --- END MODIFIED PROMPT SECTION ---
 
-    The documentation should explain what the code does, its parameters (if any), and what it returns (if any).
-    If the language is Python, generate a standard Python docstring. For other languages, use appropriate comment styles.
-    Be brief and focus on the core functionality.
-    """
 
     try:
         completion = client.chat.completions.create(
-            model="gpt-3.5-turbo", # Or another model like "gpt-4" if you have access
+            model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant that generates code documentation."},
+                {"role": "system", "content": "You are a precise code documentation generator."}, # System role can also be refined
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3 # Lower temperature for more deterministic output
+            temperature=0.2 # Slightly lower for more structured output
         )
         generated_doc = completion.choices[0].message.content.strip()
+        # Optional: Add a simple cleanup if the model sometimes includes the ``` code block markers
+        if generated_doc.startswith("```") and generated_doc.endswith("```"):
+            lines = generated_doc.split('\n')
+            if len(lines) > 2: # Ensure there's content between the markers
+                # Remove first line (e.g., ```python) and last line (```)
+                cleaned_doc_lines = lines[1:-1]
+                # Check if the first line of the supposed doc is actually the docstring/comment start
+                # This check is naive and might need refinement
+                if not (cleaned_doc_lines[0].strip().startswith('"""') or cleaned_doc_lines[0].strip().startswith('/**')):
+                    # If the model just wrapped its output in triple backticks without the language specifier on the first line
+                    pass # Keep as is, the strip() might have handled it.
+                generated_doc = "\n".join(cleaned_doc_lines).strip()
+
 
         return DocumentationOutput(
             message="Documentation generated successfully.",
-            original_code=input_data.code,
+            original_code=code_snippet,
             generated_documentation=generated_doc
         )
     except Exception as e:
-        print(f"Error calling OpenAI API: {e}") # Log the error for debugging
+        print(f"Error calling OpenAI API: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate documentation from AI: {str(e)}")
