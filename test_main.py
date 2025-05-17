@@ -119,39 +119,53 @@ def test_generate_documentation_missing_code_with_auth():
 
 # --- NEW Rate Limiting Tests ---
 
-@pytest.mark.slow # Optional: mark as slow if these tests take longer due to time.sleep
-def test_rate_limit_docs_endpoint():
+# test_main.py
+
+# ... (other imports and setup) ...
+
+@pytest.mark.slow 
+def test_rate_limit_docs_endpoint(monkeypatch): # <--- ADD monkeypatch here
     """Test rate limiting on the /generate-documentation/ endpoint."""
     if not VALID_TEST_API_KEY:
         pytest.skip("MY_APP_API_KEY is not set; skipping rate limit test that requires auth.")
 
+    # --- START COPIED MOCKING LOGIC ---
+    class MockChoice:
+        def __init__(self, content): self.message = MockMessage(content)
+    class MockMessage:
+        def __init__(self, content): self.content = content
+    class MockCompletion:
+        def __init__(self, content="Mocked AI Documentation for rate limit test"): # Slightly different content for clarity if needed
+            self.choices = [MockChoice(content)]
+
+    def mock_openai_completions_create_for_ratelimit(*args, **kwargs): # Give it a unique name if you prefer
+        # print("Mocked OpenAI for rate_limit_docs_endpoint called") # For debugging
+        return MockCompletion() # Return a simple mock completion
+
+    monkeypatch.setattr(openai_chat_completions.Completions, "create", mock_openai_completions_create_for_ratelimit)
+    # --- END COPIED MOCKING LOGIC ---
+
     headers = {"X-API-Key": VALID_TEST_API_KEY}
     payload = {"code": "def foo(): pass", "language": "python"}
 
-    # test_main.py (inside test_rate_limit_docs_endpoint)
-
-    # Hit the endpoint up to one less than the limit
-    # If limit is 5, we make 4 successful calls
-    for i in range(DOCS_ENDPOINT_LIMIT_COUNT - 1): 
+    # Make N-1 successful requests
+    for i in range(DOCS_ENDPOINT_LIMIT_COUNT - 1):
         response = client.post("/generate-documentation/", json=payload, headers=headers)
-        assert response.status_code == 200, f"Request {i+1} (within limit) failed unexpectedly: {response.text}"
+        assert response.status_code == 200, \
+            f"Request {i+1} (expected success) failed: {response.text}"
 
-    # The next request should be the one that hits the limit count (e.g., the 5th request)
-    # Let's see if this one is allowed or rejected.
+    # The Nth request should now trigger the limit
     response_at_limit = client.post("/generate-documentation/", json=payload, headers=headers)
-    
-    # Depending on slowapi's exact behavior (inclusive/exclusive):
-    # Option A: The Nth request is still allowed
-    if response_at_limit.status_code == 200:
-        # Then the (N+1)th request should be blocked
-        response_over_limit = client.post("/generate-documentation/", json=payload, headers=headers)
-        assert response_over_limit.status_code == 429, f"Expected 429 on request {DOCS_ENDPOINT_LIMIT_COUNT + 1}"
-        assert "rate limit exceeded" in response_over_limit.text.lower()
-    # Option B: The Nth request is already blocked
-    elif response_at_limit.status_code == 429:
-        assert "rate limit exceeded" in response_at_limit.text.lower()
-    else:
-        pytest.fail(f"Unexpected status code {response_at_limit.status_code} on {DOCS_ENDPOINT_LIMIT_COUNT}th request. Response: {response_at_limit.text}")
+    assert response_at_limit.status_code == 429, \
+        f"Request {DOCS_ENDPOINT_LIMIT_COUNT} (expected 429) got {response_at_limit.status_code}: {response_at_limit.text}"
+    assert "rate limit exceeded" in response_at_limit.text.lower()
+
+    # Optional: Test reset (keep commented out for CI speed unless specifically testing this)
+    # print(f"\nRate limit hit for /generate-documentation/, sleeping for {DOCS_ENDPOINT_LIMIT_SECONDS}s...")
+    # time.sleep(DOCS_ENDPOINT_LIMIT_SECONDS + 1) 
+    # response_after_wait = client.post("/generate-documentation/", json=payload, headers=headers)
+    # assert response_after_wait.status_code == 200, \
+    #    f"Rate limit did not reset. Response: {response_after_wait.text}"
 
 
 @pytest.mark.slow 
