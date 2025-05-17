@@ -1,27 +1,25 @@
 import os
-from fastapi import FastAPI, HTTPException, Security, Request # Add Request
+from fastapi import FastAPI, HTTPException, Security, Request
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# --- SlowAPI for Rate Limiting ---
-from slowapi import Limiter, _rate_limit_exceeded_handler # Import Limiter and handler
-from slowapi.util import get_remote_address # Utility to get client IP
-from slowapi.errors import RateLimitExceeded # Import the specific exception
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+# --- Add CORS Middleware ---
+from fastapi.middleware.cors import CORSMiddleware # Import CORSMiddleware
 
 load_dotenv()
 
 # --- Environment Variables ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-EXPECTED_API_KEY = os.getenv("MY_APP_API_KEY")
+EXPECTED_API_KEY = os.getenv("MY_APP_API_KEY") 
 
 # --- Rate Limiter Setup ---
-# get_remote_address is a default key function that uses the client's IP address.
-# You could also define custom key functions (e.g., based on API key or user ID).
 limiter = Limiter(key_func=get_remote_address, default_limits=["5/minute"])
-# default_limits sets a global limit if no specific @limiter.limit is applied.
-# Let's set a limit of 5 requests per minute per IP for demonstration.
 
 # --- OpenAI Client Initialization ---
 try:
@@ -36,12 +34,12 @@ except Exception as e:
 
 # --- API Key Authentication Setup ---
 API_KEY_NAME = "X-API-Key"
-api_key_header_auth = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+api_key_header_auth = APIKeyHeader(name=API_KEY_NAME, auto_error=False) 
 
 async def get_api_key(api_key_header: str | None = Security(api_key_header_auth)):
     if api_key_header is None:
         raise HTTPException(status_code=403, detail="Not authenticated: X-API-Key header missing.")
-    if not EXPECTED_API_KEY:
+    if not EXPECTED_API_KEY: 
         print("Error: Server misconfiguration - MY_APP_API_KEY is not set.")
         raise HTTPException(status_code=500, detail="API Key authentication is not configured correctly on the server.")
     if api_key_header == EXPECTED_API_KEY:
@@ -62,31 +60,41 @@ class DocumentationOutput(BaseModel):
 # --- FastAPI App Instance ---
 app = FastAPI()
 
+# --- Add Middlewares (CORS should usually be one of the first) ---
+origins = [
+    "http://localhost:3000", # Your Next.js frontend development server
+    "http://localhost:3001", # If your Next.js runs on 3001
+    # Add any other origins you want to allow (e.g., your deployed frontend URL)
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE", "PATCH"], # Be more explicit
+    allow_headers=["X-API-Key", "Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"], # Explicitly list common and your custom headers
+)
+
 # --- Add Rate Limiter to the App ---
-# This registers the RateLimitExceeded exception handler with FastAPI
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-
 # --- API Endpoints ---
+# ... (rest of your main.py, including endpoints, remains the same) ...
 @app.get("/")
-# Apply a different, perhaps more lenient, rate limit to the root or no limit.
-# For demonstration, let's make it more lenient.
-@limiter.limit("20/minute") # Example: 20 requests per minute for this specific endpoint
-async def read_root(request: Request): # Add request: Request
+@limiter.limit("20/minute") 
+async def read_root(request: Request): 
     return {"message": "Welcome to the AI Code Documentation Generator API"}
 
-# Protect this endpoint with API key authentication AND Rate Limiting
 @app.post("/generate-documentation/", response_model=DocumentationOutput, dependencies=[Security(get_api_key)])
-@limiter.limit("5/minute") # Apply rate limit: 5 requests per minute per IP
-async def generate_docs(request: Request, input_data: CodeInput): # Add request: Request
+@limiter.limit("5/minute") 
+async def generate_docs(request: Request, input_data: CodeInput): 
     if not client:
         raise HTTPException(status_code=503, detail="AI service client not initialized. Check server configuration for OpenAI API key.")
 
     language = input_data.language.lower() if input_data.language else "unknown"
     code_snippet = input_data.code
     
-    # ... (rest of your prompt generation and OpenAI call logic remains the same) ...
     prompt_parts = [
         "You are an expert programmer tasked with generating high-quality, structured documentation for code.",
         f"The language of the code is: {language}.",
