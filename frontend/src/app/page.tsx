@@ -3,9 +3,7 @@
 
 import { useState } from 'react';
 
-// Access the environment variable
-// It will be undefined if not set or not prefixed with NEXT_PUBLIC_
-const YOUR_BACKEND_API_KEY = process.env.NEXT_PUBLIC_BACKEND_API_KEY; 
+const YOUR_BACKEND_API_KEY = process.env.NEXT_PUBLIC_BACKEND_API_KEY;
 
 export default function Home() {
   const [code, setCode] = useState<string>('');
@@ -25,39 +23,36 @@ export default function Home() {
       return;
     }
     
-    if (!YOUR_BACKEND_API_KEY) { // Check if the env var was loaded
-        setError("Frontend API Key environment variable (NEXT_PUBLIC_BACKEND_API_KEY) is not configured. Please check your frontend/.env.local file.");
+    if (!YOUR_BACKEND_API_KEY) {
+        setError("Frontend API Key environment variable (NEXT_PUBLIC_BACKEND_API_KEY) is not configured.");
         setIsLoading(false);
         return;
     }
 
     try {
-      const response = await fetch('http://localhost:8000/generate-documentation/', { 
+      const response = await fetch('http://localhost:8000/generate-documentation/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-API-Key': YOUR_BACKEND_API_KEY, 
+          'X-API-Key': YOUR_BACKEND_API_KEY,
         },
         body: JSON.stringify({ code, language }),
       });
 
-      // ... (rest of your try-catch block for handling response) ...
+      const responseData = await response.json(); // Try to parse JSON regardless of ok status for error details
+
       if (!response.ok) {
-        let errorDetail = `HTTP error! Status: ${response.status}`;
-        try {
-            const errorData = await response.json();
-            errorDetail = errorData.detail || JSON.stringify(errorData) || errorDetail;
-        } catch (e) {
-            errorDetail = response.statusText || errorDetail;
-        }
+        // Use detail from JSON response if available, otherwise use a generic message
+        const errorDetail = responseData.detail || `HTTP error! Status: ${response.status} - ${response.statusText}`;
         throw new Error(errorDetail);
       }
-      const data = await response.json();
-      setDocumentation(data.generated_documentation);
+      
+      setDocumentation(responseData.generated_documentation);
 
     } catch (err: any) {
       console.error("API Call Error:", err);
-      setError(err.message || 'Failed to generate documentation. Check console for details.');
+      // If err.message is already set by the throw new Error, use it, otherwise provide a fallback
+      setError(err.message || 'Failed to generate documentation. Please try again.');
       setDocumentation('');
     } finally {
       setIsLoading(false);
@@ -65,9 +60,9 @@ export default function Home() {
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-start p-8 sm:p-16 bg-gray-50">
-      <div className="w-full max-w-3xl bg-white p-8 rounded-xl shadow-xl">
-        <h1 className="text-3xl font-bold mb-8 text-center text-gray-800">
+    <main className="flex min-h-screen flex-col items-center justify-start p-8 sm:p-16 bg-gray-100"> {/* Changed bg slightly */}
+      <div className="w-full max-w-3xl bg-white p-8 rounded-xl shadow-2xl"> {/* Increased shadow */}
+        <h1 className="text-4xl font-bold mb-10 text-center text-gray-800"> {/* Increased size/margin */}
           AI Code Documentation Generator
         </h1>
 
@@ -78,8 +73,8 @@ export default function Home() {
           </label>
           <textarea
             id="codeInput"
-            rows={10}
-            className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-sm font-mono bg-gray-50 text-gray-800"
+            rows={12} // Slightly more rows
+            className="w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm font-mono bg-gray-50 text-gray-900 resize-y" // Added resize-y, rounded-lg, text-gray-900
             value={code}
             onChange={(e) => setCode(e.target.value)}
             placeholder="Enter your code snippet here..."
@@ -87,19 +82,20 @@ export default function Home() {
         </div>
 
         {/* Language Selection */}
-        <div className="mb-6">
+        <div className="mb-8"> {/* Increased margin */}
           <label htmlFor="languageSelect" className="block text-lg font-medium text-gray-700 mb-2">
             Select Language:
           </label>
           <select
             id="languageSelect"
-            className="w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-sm bg-white text-gray-800"
+            className="w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm bg-white text-gray-900" // Added rounded-lg, text-gray-900
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
           >
             <option value="python">Python</option>
             <option value="javascript">JavaScript</option>
             <option value="typescript">TypeScript</option>
+            <option value="java">Java</option>
             {/* Add more languages as needed */}
           </select>
         </div>
@@ -108,26 +104,50 @@ export default function Home() {
         <button
           onClick={handleSubmit}
           disabled={isLoading}
-          className="w-full bg-indigo-600 text-white py-3 px-6 rounded-md text-lg font-semibold hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:bg-indigo-300 transition duration-150 ease-in-out"
+          className={`w-full text-white py-3.5 px-6 rounded-lg text-lg font-semibold focus:outline-none focus:ring-2 focus:ring-offset-2 transition duration-150 ease-in-out flex items-center justify-center
+                      ${isLoading 
+                        ? 'bg-indigo-400 cursor-not-allowed' 
+                        : 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500'
+                      }`} // Adjusted padding, added flex for spinner
         >
-          {isLoading ? 'Generating...' : 'Generate Documentation'}
+          {isLoading ? (
+            <>
+              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Generating...
+            </>
+          ) : (
+            'Generate Documentation'
+          )}
         </button>
 
-        {/* Error Display */}
+        {/* Error Display - More prominent */}
         {error && (
-          <div className="mt-6 p-4 bg-red-100 text-red-700 border border-red-300 rounded-md">
-            <p className="font-semibold">Error:</p>
-            <p>{error}</p>
+          <div className="mt-8 p-4 bg-red-50 text-red-700 border-l-4 border-red-500 rounded-md shadow-md"> {/* Enhanced styling */}
+            <div className="flex">
+              <div className="py-1">
+                {/* Optional: Add an error icon here */}
+                <svg className="h-6 w-6 text-red-500 mr-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div>
+                <p className="font-bold">An error occurred:</p>
+                <p className="text-sm">{error}</p>
+              </div>
+            </div>
           </div>
         )}
 
         {/* Documentation Output Area */}
         {documentation && !error && (
-          <div className="mt-8">
+          <div className="mt-10"> {/* Increased margin */}
             <h2 className="text-2xl font-semibold text-gray-700 mb-4">
               Generated Documentation:
             </h2>
-            <pre className="bg-gray-100 p-4 rounded-md overflow-x-auto text-sm font-mono text-gray-800 whitespace-pre-wrap">
+            <pre className="bg-gray-800 text-gray-100 p-6 rounded-lg overflow-x-auto text-sm font-mono whitespace-pre-wrap shadow-inner"> {/* Darker theme for code, more padding, rounded-lg */}
               {documentation}
             </pre>
           </div>
