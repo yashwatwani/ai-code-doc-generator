@@ -1,20 +1,31 @@
 import os
-from fastapi import FastAPI, HTTPException, Security
+from fastapi import FastAPI, HTTPException, Security, Request # Add Request
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 from openai import OpenAI
 from dotenv import load_dotenv
 
+# --- SlowAPI for Rate Limiting ---
+from slowapi import Limiter, _rate_limit_exceeded_handler # Import Limiter and handler
+from slowapi.util import get_remote_address # Utility to get client IP
+from slowapi.errors import RateLimitExceeded # Import the specific exception
+
 load_dotenv()
 
 # --- Environment Variables ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-EXPECTED_API_KEY = os.getenv("MY_APP_API_KEY") # Used by get_api_key dependency
+EXPECTED_API_KEY = os.getenv("MY_APP_API_KEY")
+
+# --- Rate Limiter Setup ---
+# get_remote_address is a default key function that uses the client's IP address.
+# You could also define custom key functions (e.g., based on API key or user ID).
+limiter = Limiter(key_func=get_remote_address, default_limits=["5/minute"])
+# default_limits sets a global limit if no specific @limiter.limit is applied.
+# Let's set a limit of 5 requests per minute per IP for demonstration.
 
 # --- OpenAI Client Initialization ---
 try:
     if not OPENAI_API_KEY:
-        # This check is for app startup. If key is missing, client won't be functional.
         print("Warning: OPENAI_API_KEY environment variable not set. OpenAI client will not be functional.")
         client = None
     else:
@@ -23,30 +34,20 @@ except Exception as e:
     print(f"Error initializing OpenAI client: {e}")
     client = None
 
-
 # --- API Key Authentication Setup ---
 API_KEY_NAME = "X-API-Key"
-# Set auto_error to False to handle missing header explicitly in get_api_key
-api_key_header_auth = APIKeyHeader(name=API_KEY_NAME, auto_error=False) 
+api_key_header_auth = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 async def get_api_key(api_key_header: str | None = Security(api_key_header_auth)):
-    """
-    Dependency that checks for a valid API key in the X-API-Key header.
-    """
-    if api_key_header is None: # Manually check if header was provided
+    if api_key_header is None:
         raise HTTPException(status_code=403, detail="Not authenticated: X-API-Key header missing.")
-
-    # This EXPECTED_API_KEY is the module-level global from above
-    if not EXPECTED_API_KEY: 
-        # This means the server itself is misconfigured (MY_APP_API_KEY not in .env)
-        raise HTTPException(status_code=500, detail="API Key not configured on server.")
-    
+    if not EXPECTED_API_KEY:
+        print("Error: Server misconfiguration - MY_APP_API_KEY is not set.")
+        raise HTTPException(status_code=500, detail="API Key authentication is not configured correctly on the server.")
     if api_key_header == EXPECTED_API_KEY:
         return api_key_header
     else:
-        raise HTTPException(
-            status_code=403, detail="Could not validate credentials"
-        )
+        raise HTTPException(status_code=403, detail="Could not validate credentials")
 
 # --- Pydantic Models ---
 class CodeInput(BaseModel):
@@ -61,20 +62,31 @@ class DocumentationOutput(BaseModel):
 # --- FastAPI App Instance ---
 app = FastAPI()
 
+# --- Add Rate Limiter to the App ---
+# This registers the RateLimitExceeded exception handler with FastAPI
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
 # --- API Endpoints ---
 @app.get("/")
-async def read_root():
+# Apply a different, perhaps more lenient, rate limit to the root or no limit.
+# For demonstration, let's make it more lenient.
+@limiter.limit("20/minute") # Example: 20 requests per minute for this specific endpoint
+async def read_root(request: Request): # Add request: Request
     return {"message": "Welcome to the AI Code Documentation Generator API"}
 
+# Protect this endpoint with API key authentication AND Rate Limiting
 @app.post("/generate-documentation/", response_model=DocumentationOutput, dependencies=[Security(get_api_key)])
-async def generate_docs(input_data: CodeInput):
+@limiter.limit("5/minute") # Apply rate limit: 5 requests per minute per IP
+async def generate_docs(request: Request, input_data: CodeInput): # Add request: Request
     if not client:
-        # This means OpenAI client couldn't initialize (e.g., missing OPENAI_API_KEY or invalid key format)
-        raise HTTPException(status_code=500, detail="OpenAI client not initialized. Check server configuration for OpenAI API key.")
+        raise HTTPException(status_code=503, detail="AI service client not initialized. Check server configuration for OpenAI API key.")
 
     language = input_data.language.lower() if input_data.language else "unknown"
     code_snippet = input_data.code
     
+    # ... (rest of your prompt generation and OpenAI call logic remains the same) ...
     prompt_parts = [
         "You are an expert programmer tasked with generating high-quality, structured documentation for code.",
         f"The language of the code is: {language}.",
@@ -135,7 +147,7 @@ async def generate_docs(input_data: CodeInput):
             lines = generated_doc.split('\n')
             if len(lines) > 2:
                 cleaned_doc_lines = lines[1:-1]
-                if not (cleaned_doc_lines[0].strip().startswith('"""') or cleaned_doc_lines[0].strip().startswith('/**')):
+                if cleaned_doc_lines and not (cleaned_doc_lines[0].strip().startswith('"""') or cleaned_doc_lines[0].strip().startswith('/**')):
                     pass
                 generated_doc = "\n".join(cleaned_doc_lines).strip()
 
@@ -145,7 +157,5 @@ async def generate_docs(input_data: CodeInput):
             generated_documentation=generated_doc
         )
     except Exception as e:
-        # Log the actual error for server-side debugging
         print(f"Error during OpenAI API call: {type(e).__name__} - {str(e)}")
-        # Return a generic error to the client
-        raise HTTPException(status_code=503, detail="AI service unavailable or encountered an error.")
+        raise HTTPException(status_code=503, detail="AI service unavailable or encountered an error during generation.")

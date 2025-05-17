@@ -31,5 +31,6 @@ jobs: # Defines the jobs to run as part of the workflow
       - name: Run tests with pytest # Step 4: Run your tests
         env: # Environment variables for this step
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_DUMMY }} # Use a dummy key for CI tests
+          MY_APP_API_KEY: ${{ secrets.MY_APP_API_KEY_FOR_CI }} # Add this line
         run: |
           pytest -v
