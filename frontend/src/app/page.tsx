@@ -38,9 +38,7 @@ export default function Home() {
     }
 
     try {
-      // Construct the full URL for the backend endpoint
       const endpoint = `${BACKEND_URL}/generate-documentation/`;
-
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -59,9 +57,15 @@ export default function Home() {
       
       setDocumentation(responseData.generated_documentation);
 
-    } catch (err: any) {
-      console.error("API Call Error:", err);
-      setError(err.message || 'Failed to generate documentation. Please check the console and try again.');
+    } catch (error: unknown) { // Corrected typing for the catch block variable
+      console.error("API Call Error:", error);
+      let message = 'Failed to generate documentation. Please try again.';
+      if (error instanceof Error) {
+        message = error.message; 
+      } else if (typeof error === 'string') {
+        message = error; 
+      }
+      setError(message);
       setDocumentation('');
     } finally {
       setIsLoading(false);
