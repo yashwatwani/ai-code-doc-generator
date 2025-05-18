@@ -1,0 +1,20 @@
+[
+    {
+        "id": "py_add_function",
+        "code_snippet": "def add(a: int, b: int) -> int:\n    \"\"\"Adds two integer numbers.\"\"\"\n    return a + b",
+        "language": "python",
+        "golden_documentation": "\"\"\"\nSummary: Adds two integer numbers.\n\nArgs:\n    a (int): The first integer.\n    b (int): The second integer.\n\nReturns:\n    int: The sum of a and b.\n\"\"\""
+    },
+    {
+        "id": "py_greet_function",
+        "code_snippet": "def greet(name: str) -> str:\n    return f\"Hello, {name}!\"",
+        "language": "python",
+        "golden_documentation": "\"\"\"\nSummary: Returns a greeting message for a given name.\n\nArgs:\n    name (str): The name of the person to greet.\n\nReturns:\n    str: A greeting message.\n\"\"\""
+    },
+    {
+        "id": "js_sum_function",
+        "code_snippet": "/**\n * Calculates the sum of two numbers.\n * @param {number} x The first number.\n * @param {number} y The second number.\n * @returns {number} The sum of x and y.\n */\nfunction sum(x, y) {\n    return x + y;\n}",
+        "language": "javascript",
+        "golden_documentation": "/**\n * Summary: Calculates the sum of two numbers.\n *\n * @param {number} x - The first number.\n * @param {number} y - The second number.\n * @returns {number} The sum of x and y.\n */"
+    }
+]
