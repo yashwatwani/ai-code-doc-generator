@@ -46,3 +46,4 @@ yarn-error.log*
 
 # ChromaDB local data
 chroma_db/chroma_db/
+chroma_db/
