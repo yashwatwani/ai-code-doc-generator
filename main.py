@@ -96,7 +96,7 @@ origins = [
     "http://localhost:3000", 
     "http://localhost:3001",
     "https://ai-code-doc-generator.onrender.com/",
-    "https://ai-code-doc-generator.vercel.app/",
+    "https://ai-code-doc-generator.vercel.app",
     "ai-code-doc-generator-git-main-yashwatwanis-projects.vercel.app",
     "ai-code-doc-generator-cmyrjxami-yashwatwanis-projects.vercel.app"
 ]
