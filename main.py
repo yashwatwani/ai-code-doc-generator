@@ -1,13 +1,59 @@
 import os
 from dotenv import load_dotenv
+
+# Load .env as early as possible
 load_dotenv() 
 
-# --- Cachetools for In-Memory Caching ---
-from cachetools import TTLCache # Import TTLCache
-
-# ... (other imports: Langfuse, OpenAI, FastAPI, etc. remain the same) ...
+# --- Langfuse Integration ---
 from langfuse import Langfuse
+
+# --- Evaluation Script Import ---
+# Assuming evaluate.py is in the same directory or accessible in PYTHONPATH
+try:
+    from evaluate import evaluate_documentation
+    EVALUATION_SCRIPT_AVAILABLE = True
+    print("Evaluation script 'evaluate.py' imported successfully.")
+except ImportError:
+    print("Warning: Evaluation script 'evaluate.py' not found or contains errors. Inline evaluation will be skipped.")
+    EVALUATION_SCRIPT_AVAILABLE = False
+    def evaluate_documentation(code, language, generated_doc): # Dummy function
+        print("Warning: Using dummy evaluate_documentation function.")
+        return {}
+
+
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
+LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+
+langfuse_client_for_tracing = None 
+try:
+    if LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY:
+        langfuse_client_for_tracing = Langfuse(
+            public_key=LANGFUSE_PUBLIC_KEY,
+            secret_key=LANGFUSE_SECRET_KEY,
+            host=LANGFUSE_HOST
+        )
+        print("Langfuse client initialized.")
+    else:
+        print("Warning: Langfuse environment variables not fully set. Langfuse tracing will be disabled.")
+except Exception as e:
+    print(f"Error initializing Langfuse client: {type(e).__name__} - {e}")
+
+# --- OpenAI Client Initialization ---
 from openai import OpenAI 
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai_llm_client = None 
+try:
+    if not OPENAI_API_KEY:
+        print("Warning: OPENAI_API_KEY environment variable not set.")
+    else:
+        openai_llm_client = OpenAI(api_key=OPENAI_API_KEY)
+        print("OpenAI client initialized.")
+except Exception as e:
+    print(f"Error initializing OpenAI client: {type(e).__name__} - {e}")
+
+# --- FastAPI and other imports ---
 from fastapi import FastAPI, HTTPException, Security, Request
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
@@ -16,40 +62,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from fastapi.middleware.cors import CORSMiddleware
 
-# --- Environment Variables & Client Initializations (as before) ---
-# Langfuse
-LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
-LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
-LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
-langfuse_client_for_tracing = None 
-try: # ... (Langfuse init logic as before) ...
-    if LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY:
-        langfuse_client_for_tracing = Langfuse(public_key=LANGFUSE_PUBLIC_KEY, secret_key=LANGFUSE_SECRET_KEY, host=LANGFUSE_HOST)
-        print("Langfuse client initialized.")
-    else: print("Warning: Langfuse environment variables not fully set. Langfuse tracing will be disabled.")
-except Exception as e: print(f"Error initializing Langfuse client: {type(e).__name__} - {e}")
-
-# OpenAI
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai_llm_client = None 
-try: # ... (OpenAI init logic as before) ...
-    if not OPENAI_API_KEY: print("Warning: OPENAI_API_KEY environment variable not set.")
-    else:
-        openai_llm_client = OpenAI(api_key=OPENAI_API_KEY)
-        print("OpenAI client initialized.")
-except Exception as e: print(f"Error initializing OpenAI client: {type(e).__name__} - {e}")
-
-# App Specific
+# --- App and other configurations ---
 EXPECTED_API_KEY = os.getenv("MY_APP_API_KEY") 
-
-# --- Caching Setup ---
-# TTLCache: Time To Live Cache. Items expire after a set duration.
-# maxsize: Max number of items in cache.
-# ttl: Time to live in seconds (e.g., 300 seconds = 5 minutes)
-# You can adjust maxsize and ttl based on your needs.
-documentation_cache = TTLCache(maxsize=100, ttl=300) 
-
-# ... (Rate Limiter, API Key Auth, Pydantic Models, FastAPI App instance, Middlewares - remain the same) ...
 limiter = Limiter(key_func=get_remote_address, default_limits=["5/minute"])
 API_KEY_NAME = "X-API-Key"
 api_key_header_auth = APIKeyHeader(name=API_KEY_NAME, auto_error=False) 
@@ -67,16 +81,17 @@ class CodeInput(BaseModel): code: str; language: str | None = None
 class DocumentationOutput(BaseModel): message: str; original_code: str; generated_documentation: str | None = None
 
 app = FastAPI()
-origins = [ "http://localhost:3000", "http://localhost:3001", "https://ai-code-doc-generator.vercel.app" ] # Ensure your Vercel URL is here
+origins = [ 
+    "http://localhost:3000", "http://localhost:3001",
+    "https://ai-code-doc-generator.vercel.app" # Your deployed frontend URL
+]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["X-API-Key", "Content-Type", "Authorization"])          
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# --- API Endpoints ---
 @app.get("/")
 @limiter.limit("20/minute") 
 async def read_root(request: Request): 
-    # ... (Langfuse trace logic for root if any) ...
     if langfuse_client_for_tracing:
         try: langfuse_client_for_tracing.trace(name="read_root_trace", user_id=request.client.host if request.client else "unknown_client")
         except Exception as e: print(f"Langfuse error in read_root (non-critical): {e}")
@@ -86,76 +101,45 @@ async def read_root(request: Request):
 @limiter.limit("5/minute") 
 async def generate_docs(request: Request, input_data: CodeInput):
     current_trace = None
-    generation_span = None # For the OpenAI call
-    cache_hit = False # To track if we used cache
+    generation_span = None
 
-    language = input_data.language.lower() if input_data.language else "unknown"
-    code_snippet = input_data.code
-
-    # --- Caching Logic: Check cache first ---
-    cache_key = (code_snippet, language) # Use a tuple of code and language as the cache key
-    if cache_key in documentation_cache:
-        cached_documentation = documentation_cache[cache_key]
-        print(f"Cache HIT for key: ({language}, code_hash_placeholder)") # Avoid logging full code
-        cache_hit = True
-        
-        # Create a Langfuse trace even for cache hits for observability
-        if langfuse_client_for_tracing:
-            try:
-                current_trace = langfuse_client_for_tracing.trace(
-                    name="generate-code-documentation-cache-hit", # Differentiate cache hit traces
-                    user_id=request.client.host if request.client else "unknown_client",
-                    metadata={"language": language, "code_length": len(code_snippet), "cache_hit": True},
-                    tags=["core-feature", "cache-hit", f"lang:{language}"]
-                )
-                current_trace.update(
-                    input={"code": code_snippet, "language": language},
-                    output={"generated_documentation": cached_documentation}
-                )
-            except Exception as e: print(f"Langfuse error during cache hit trace: {e}")
-
-        return DocumentationOutput(
-            message="Documentation retrieved from cache successfully.",
-            original_code=code_snippet,
-            generated_documentation=cached_documentation
-        )
-    # --- End Caching Logic: Check cache ---
-    
-    print(f"Cache MISS for key: ({language}, code_hash_placeholder)") # Avoid logging full code
-
-    # If not a cache hit, proceed with Langfuse trace creation and OpenAI call
     if langfuse_client_for_tracing:
         try:
             current_trace = langfuse_client_for_tracing.trace(
-                name="generate-code-documentation", # Original trace name for cache misses
+                name="generate-code-documentation",
                 user_id=request.client.host if request.client else "unknown_client",
-                metadata={"language": language, "code_length": len(code_snippet), "cache_hit": False},
-                tags=["core-feature", "cache-miss", f"lang:{language}"]
+                metadata={"language": input_data.language, "code_length": len(input_data.code)},
+                tags=["core-feature", f"lang:{input_data.language or 'unknown'}"]
             )
-            current_trace.update(input={"code": code_snippet, "language": language})
-        except Exception as e: print(f"Langfuse error starting trace: {e}")
+            current_trace.update(input={"code": input_data.code, "language": input_data.language})
+        except Exception as e: print(f"Langfuse error starting trace (non-critical): {e}")
 
     if not openai_llm_client: 
         if current_trace: current_trace.update(level="ERROR", status_message="OpenAI client not initialized", output={"error": "OpenAI client misconfiguration"})
         raise HTTPException(status_code=503, detail="AI service client not initialized. Check server configuration for OpenAI API key.")
 
-    prompt_parts = [ # ... (your full prompt_parts logic as before) ... 
-        "You are an expert programmer...", f"The language of the code is: {language}.", f"```\n{code_snippet}\n```",
-        "\nGenerate documentation that includes:", "1. A concise summary...", "2. A description of its parameters...", "3. A description of what it returns..."
-    ]
-    if language == "python": prompt_parts.extend(["\nFor Python, format...", "Example for Python:...", "\"\"\"...", "\"\"\""]) 
-    elif language == "javascript": prompt_parts.extend(["\nFor JavaScript, format...", "Example for JavaScript:...", "/**...", " */"]) 
-    else: prompt_parts.extend(["\nFor this language, use a standard block comment..."]) 
-    prompt_parts.append("\nBe precise and do not add any conversational fluff...")
+    language = input_data.language.lower() if input_data.language else "unknown"
+    code_snippet = input_data.code
+    
+    # --- Construct Prompt (Ensure your full prompt logic is here) ---
+    prompt_parts = [
+        "You are an expert programmer tasked with generating high-quality, structured documentation for code.",
+        f"The language of the code is: {language}.", "Analyze the following code snippet:",
+        f"```\n{code_snippet}\n```", "\nGenerate documentation that includes:",
+        "1. A concise summary...", "2. A description of its parameters...", "3. A description of what it returns..."
+    ] # Abridged for brevity - use your full prompt_parts logic
+    if language == "python": prompt_parts.extend(["\nFor Python...", "Example...", "\"\"\"...\"\"\""])
+    elif language == "javascript": prompt_parts.extend(["\nFor JavaScript...", "Example...", "/**...*/"])
+    else: prompt_parts.extend(["\nFor this language..."])
+    prompt_parts.append("\nBe precise...")
     prompt = "\n".join(prompt_parts)
+    # --- End Construct Prompt ---
 
     if current_trace:
         try:
-            generation_span = current_trace.generation(
-                name="openai-documentation-generation", model="gpt-3.5-turbo",
-                model_parameters={"temperature": 0.2}, prompt=prompt 
-            )
-        except Exception as e: print(f"Langfuse error starting generation span: {e}"); generation_span = None
+            generation_span = current_trace.generation(name="openai-documentation-generation", model="gpt-3.5-turbo",
+                                                   model_parameters={"temperature": 0.2}, prompt=prompt)
+        except Exception as e: print(f"Langfuse error starting generation span (non-critical): {e}"); generation_span = None
 
     try:
         completion_obj = openai_llm_client.chat.completions.create( 
@@ -168,38 +152,77 @@ async def generate_docs(request: Request, input_data: CodeInput):
         
         if generation_span:
             try: generation_span.end(output=generated_doc, usage=openai_usage_data)
-            except Exception as e: print(f"Langfuse error ending generation span: {e}")
+            except Exception as e: print(f"Langfuse error ending generation span (non-critical): {e}")
         
-        # --- Caching Logic: Store result in cache ---
-        documentation_cache[cache_key] = generated_doc
-        print(f"Stored in cache for key: ({language}, code_hash_placeholder)")
-        # --- End Caching Logic: Store result ---
-
-        # ... (backtick cleanup as before) ...
-        if generated_doc.startswith("```") and generated_doc.endswith("```"):
-            lines = generated_doc.split('\n'); # ... (rest of cleanup) ...
+        # Backtick cleanup
+        if generated_doc.startswith("```") and generated_doc.endswith("```"): # ... (your cleanup logic) ...
+            lines = generated_doc.split('\n');
             if len(lines) > 2:
                 cleaned_doc_lines = lines[1:-1]
                 if cleaned_doc_lines and not (cleaned_doc_lines[0].strip().startswith('"""') or cleaned_doc_lines[0].strip().startswith('/**')): pass
                 generated_doc = "\n".join(cleaned_doc_lines).strip()
 
+        # --- Inline Evaluation & Langfuse Scoring ---
+        if EVALUATION_SCRIPT_AVAILABLE and current_trace and generated_doc:
+            print(f"Running inline evaluation for trace ID: {current_trace.id}")
+            try:
+                eval_results = evaluate_documentation(code_snippet, language, generated_doc)
+                print(f"Evaluation results: {eval_results}")
+                for metric_name, metric_value in eval_results.items():
+                    if metric_name in ["Code_Analysis_Debug", "Notes"]: # Skip non-score fields
+                        continue
+                    
+                    score_val_for_langfuse = 0 # Default numeric score
+                    comment_for_langfuse = str(metric_value)
+
+                    if isinstance(metric_value, bool):
+                        score_val_for_langfuse = 1 if metric_value else 0
+                    elif isinstance(metric_value, str):
+                        # For categorical strings, we can try to map them or just use a default numeric value
+                        # and put the string in the comment.
+                        # Example mapping for readability:
+                        if metric_name == "M5_Word_Count_Readability":
+                            if metric_value == "Acceptable Length": score_val_for_langfuse = 1
+                            elif metric_value == "Too Short": score_val_for_langfuse = 0.5 # Or some other numeric mapping
+                            elif metric_value == "Too Long": score_val_for_langfuse = 0.5
+                            # else "Not Applicable" will be 0 by default
+                        elif "Documentation" in metric_name: # For M2 and M3
+                            if "Present and Expected" in metric_value: score_val_for_langfuse = 1
+                            elif "Absent and Not Expected" in metric_value: score_val_for_langfuse = 1 # Also good
+                            elif "Missing but Expected" in metric_value: score_val_for_langfuse = 0.25 # Penalize
+                            elif "Present but Not Expected" in metric_value: score_val_for_langfuse = 0.75 # Slightly penalized
+                            # else "Not Applicable" will be 0
+
+                    try:
+                        print(f"Logging score to Langfuse: TraceID={current_trace.id}, Name='{metric_name}', Value={score_val_for_langfuse}, Comment='{comment_for_langfuse}'")
+                        current_trace.score(
+                            name=metric_name, # e.g., "M1_Summary_Present"
+                            value=score_val_for_langfuse, # Numeric value
+                            comment=comment_for_langfuse # Original string value as comment
+                        )
+                    except Exception as e_score:
+                        print(f"Langfuse error logging score '{metric_name}': {e_score}")
+            except Exception as e_eval_call:
+                print(f"Error calling evaluate_documentation or processing its results: {e_eval_call}")
+        # --- End Inline Evaluation ---
+
         if current_trace: 
             try: current_trace.update(output={"generated_documentation": generated_doc}, level="DEFAULT")
-            except Exception as e: print(f"Langfuse error updating trace output: {e}")
+            except Exception as e: print(f"Langfuse error updating trace output (non-critical): {e}")
 
         return DocumentationOutput(
-            message="Documentation generated successfully (from AI).", # Indicate source
+            message="Documentation generated successfully (from AI).",
             original_code=code_snippet,
             generated_documentation=generated_doc
         )
     except Exception as e:
-        # ... (error handling as before, including updating Langfuse trace/generation on error) ...
+        # ... (your existing comprehensive error handling for the main try block) ...
         if generation_span: 
             try: generation_span.end(level="ERROR", status_message=str(e))
-            except Exception as le: print(f"Langfuse error ending generation span with error: {le}")
+            except Exception as le: print(f"Langfuse error ending generation span with error (non-critical): {le}")
         if current_trace:  
             try: current_trace.update(level="ERROR", status_message=str(e), output={"error": str(e)})
-            except Exception as le: print(f"Langfuse error updating trace with error: {le}")
+            except Exception as le: print(f"Langfuse error updating trace with error (non-critical): {le}")
         print(f"Error during API processing: {type(e).__name__} - {str(e)}") 
         if isinstance(e, HTTPException): raise
         else: raise HTTPException(status_code=503, detail="AI service unavailable or encountered an error during generation.")
