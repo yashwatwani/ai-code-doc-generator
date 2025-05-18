@@ -41,3 +41,8 @@ yarn-error.log*
 # local env files
 .env*.local # This is a common and good pattern
 .env # If you accidentally created a plain .env here
+
+# ... other ignores ...
+
+# ChromaDB local data
+chroma_db/chroma_db/
