@@ -4,6 +4,7 @@ import re
 # pip install textstat
 # import textstat 
 
+
 def check_presence_of_summary(documentation: str, language: str) -> bool:
     """
     Checks if a general summary seems to be present.

@@ -16,5 +16,11 @@
         "code_snippet": "/**\n * Calculates the sum of two numbers.\n * @param {number} x The first number.\n * @param {number} y The second number.\n * @returns {number} The sum of x and y.\n */\nfunction sum(x, y) {\n    return x + y;\n}",
         "language": "javascript",
         "golden_documentation": "/**\n * Summary: Calculates the sum of two numbers.\n *\n * @param {number} x - The first number.\n * @param {number} y - The second number.\n * @returns {number} The sum of x and y.\n */"
+    },
+    {
+        "id": "py_complex_function_01",
+        "code_snippet": "def process_data(data_list, *, threshold=0.5, normalize=True):\n    # complex logic here\n    if not data_list: return []\n    # ...\n    return processed_list",
+        "language": "python",
+        "golden_documentation": "\"\"\"\nProcesses a list of data according to a threshold and normalization flag.\n\nArgs:\n    data_list (list): The list of data items to process.\n    threshold (float, optional): The threshold for processing. Defaults to 0.5.\n    normalize (bool, optional): Whether to normalize the data. Defaults to True.\n\nReturns:\n    list: The list of processed data items, or an empty list if input is empty.\n\"\"\""
     }
 ]
