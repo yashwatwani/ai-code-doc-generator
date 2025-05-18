@@ -7,20 +7,20 @@ load_dotenv()
 # --- Langfuse Integration ---
 from langfuse import Langfuse
 
-LANGFUSE_PUBLIC_KEY_VAR = os.getenv("LANGFUSE_PUBLIC_KEY")
-LANGFUSE_SECRET_KEY_VAR = os.getenv("LANGFUSE_SECRET_KEY")
-LANGFUSE_HOST_VAR = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY") # Renamed for clarity
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY") # Renamed for clarity
+LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 
 langfuse_client_for_tracing = None 
 try:
-    if LANGFUSE_PUBLIC_KEY_VAR and LANGFUSE_SECRET_KEY_VAR:
+    if LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY:
         langfuse_client_for_tracing = Langfuse(
-            public_key=LANGFUSE_PUBLIC_KEY_VAR,
-            secret_key=LANGFUSE_SECRET_KEY_VAR,
-            host=LANGFUSE_HOST_VAR
+            public_key=LANGFUSE_PUBLIC_KEY,
+            secret_key=LANGFUSE_SECRET_KEY,
+            host=LANGFUSE_HOST
             # debug=False # Set to False or remove for production
         )
-        print("Langfuse client initialized.") # Keep this for startup confirmation
+        print("Langfuse client initialized.")
     else:
         print("Warning: Langfuse environment variables (PUBLIC_KEY, SECRET_KEY) not fully set. Langfuse tracing will be disabled.")
 except Exception as e:
@@ -29,14 +29,14 @@ except Exception as e:
 # --- OpenAI Client Initialization ---
 from openai import OpenAI 
 
-OPENAI_API_KEY_VAR = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") # Renamed for clarity
 openai_llm_client = None 
 try:
-    if not OPENAI_API_KEY_VAR:
+    if not OPENAI_API_KEY:
         print("Warning: OPENAI_API_KEY environment variable not set. OpenAI client will not be functional.")
     else:
-        openai_llm_client = OpenAI(api_key=OPENAI_API_KEY_VAR)
-        print("OpenAI client initialized.") # Keep this for startup confirmation
+        openai_llm_client = OpenAI(api_key=OPENAI_API_KEY)
+        print("OpenAI client initialized.")
 except Exception as e:
     print(f"Error initializing OpenAI client: {type(e).__name__} - {e}")
 
@@ -50,7 +50,8 @@ from slowapi.errors import RateLimitExceeded
 from fastapi.middleware.cors import CORSMiddleware
 
 # --- App and other configurations ---
-EXPECTED_API_KEY_VAR = os.getenv("MY_APP_API_KEY")
+# This is the key your application's own API endpoints expect from clients
+EXPECTED_API_KEY = os.getenv("MY_APP_API_KEY") 
 
 # Rate Limiter
 limiter = Limiter(key_func=get_remote_address, default_limits=["5/minute"])
@@ -60,16 +61,22 @@ API_KEY_NAME = "X-API-Key"
 api_key_header_auth = APIKeyHeader(name=API_KEY_NAME, auto_error=False) 
 
 async def get_api_key(api_key_header: str | None = Security(api_key_header_auth)):
-    if api_key_header is None:
-        raise HTTPException(status_code=403, detail="Not authenticated: X-API-Key header missing.")
-    if not EXPECTED_API_KEY_VAR: 
-        # Server-side log for this specific misconfiguration
+    # 1. Check if the server itself is configured to expect an API key
+    if not EXPECTED_API_KEY: 
         print("CRITICAL SERVER ERROR: MY_APP_API_KEY (for client authentication) is not set in the environment.")
         raise HTTPException(status_code=500, detail="API Key authentication is not configured correctly on the server.")
-    if api_key_header == EXPECTED_API_KEY_VAR:
+
+    # 2. Check if the client actually sent the API key header
+    if api_key_header is None:
+        raise HTTPException(status_code=403, detail="Not authenticated: X-API-Key header missing.")
+    
+    # 3. Validate the provided API key against the expected key
+    if api_key_header == EXPECTED_API_KEY:
         return api_key_header
     else:
-        raise HTTPException(status_code=403, detail="Could not validate credentials")
+        raise HTTPException(
+            status_code=403, detail="Could not validate credentials"
+        )
 
 # Pydantic Models
 class CodeInput(BaseModel):
@@ -93,6 +100,7 @@ origins = [
     "ai-code-doc-generator-git-main-yashwatwanis-projects.vercel.app",
     "ai-code-doc-generator-cmyrjxami-yashwatwanis-projects.vercel.app"
 ]
+
 app.add_middleware(
     CORSMiddleware, 
     allow_origins=origins, 
@@ -116,7 +124,7 @@ async def read_root(request: Request):
                 user_id=request.client.host if request.client else "unknown_client"
             )
         except Exception as e:
-            print(f"Langfuse error in read_root (non-critical): {e}") # Log non-critical Langfuse errors
+            print(f"Langfuse error in read_root (non-critical): {e}")
     return {"message": "Welcome to the AI Code Documentation Generator API"}
 
 @app.post("/generate-documentation/", response_model=DocumentationOutput, dependencies=[Security(get_api_key)])
@@ -144,6 +152,7 @@ async def generate_docs(request: Request, input_data: CodeInput):
     language = input_data.language.lower() if input_data.language else "unknown"
     code_snippet = input_data.code
     
+    # --- Construct Prompt (Ensure your full prompt logic is here) ---
     prompt_parts = [
         "You are an expert programmer tasked with generating high-quality, structured documentation for code.",
         f"The language of the code is: {language}.",
@@ -175,6 +184,7 @@ async def generate_docs(request: Request, input_data: CodeInput):
         ])
     prompt_parts.append("\nBe precise and do not add any conversational fluff or explanations outside the documentation block itself.")
     prompt = "\n".join(prompt_parts)
+    # --- End Construct Prompt ---
 
     if current_trace:
         try:
@@ -227,25 +237,23 @@ async def generate_docs(request: Request, input_data: CodeInput):
             except Exception as e:
                 print(f"Langfuse error updating trace output (non-critical): {e}")
 
-
         return DocumentationOutput(
             message="Documentation generated successfully.",
             original_code=code_snippet,
             generated_documentation=generated_doc
         )
     except Exception as e:
-        if generation_span: # If generation_span was created, try to end it with error
+        if generation_span: 
             try: generation_span.end(level="ERROR", status_message=str(e))
             except Exception as le: print(f"Langfuse error ending generation span with error (non-critical): {le}")
-        if current_trace:  # Also update the main trace with error
+        if current_trace:  
             try:
                 current_trace.update(level="ERROR", status_message=str(e), output={"error": str(e)})
             except Exception as le:
                 print(f"Langfuse error updating trace with error (non-critical): {le}")
         
-        # Log the original error for server-side debugging
         print(f"Error during API processing: {type(e).__name__} - {str(e)}") 
-        if isinstance(e, HTTPException): # If it's already an HTTPException, re-raise
+        if isinstance(e, HTTPException): 
             raise
-        else: # For other exceptions, wrap in a generic 503 for the client
+        else: 
             raise HTTPException(status_code=503, detail="AI service unavailable or encountered an error during generation.")
