@@ -47,7 +47,7 @@ def test_generate_documentation_success_with_auth(monkeypatch):
 
     assert response.status_code == 200, f"Response: {response.text}"
     response_data = response.json()
-    assert response_data["message"] == "Documentation generated successfully."
+    assert response_data["message"] == "Documentation generated successfully (from AI)."
     assert "Mocked JSDoc for test" in response_data["generated_documentation"]
 
 def test_generate_documentation_no_api_key():
