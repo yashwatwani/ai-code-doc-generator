@@ -5,7 +5,8 @@ import re # Needed for some evaluation functions, ensure it's imported
 
 # --- Configuration for calling your deployed API ---
 # REPLACE with your actual Render URL and the API key your Render backend expects
-BACKEND_API_URL = "https://ai-code-doc-generator.onrender.com/generate-documentation/" 
+#BACKEND_API_URL = "https://ai-code-doc-generator.onrender.com/generate-documentation/" 
+BACKEND_API_URL = "https://localhost:8000/generate-documentation/" 
 BACKEND_API_KEY = "your_secret_app_api_key_123" # !!! REPLACE THIS !!!
 
 # --- Evaluation Metric Helper Functions & Main Evaluator ---
