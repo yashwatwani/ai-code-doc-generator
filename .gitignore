@@ -49,3 +49,4 @@ yarn-error.log*
 chroma_db/chroma_db/
 chroma_db/
 chroma_db_render/
+chroma_db_local_default/
