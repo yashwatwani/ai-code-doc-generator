@@ -15,6 +15,7 @@ Deprecated==1.2.18
 distro==1.9.0
 durationpy==0.10
 fastapi==0.115.9
+fastapi-cache2==0.2.2
 filelock==3.18.0
 flatbuffers==25.2.10
 fsspec==2025.3.2
@@ -62,6 +63,7 @@ opentelemetry-util-http==0.54b1
 orjson==3.10.18
 overrides==7.7.0
 packaging==24.2
+pendulum==3.1.0
 pillow==11.2.1
 pluggy==1.6.0
 posthog==4.0.1
@@ -105,6 +107,7 @@ transformers==4.51.3
 typer==0.15.4
 typing-inspection==0.4.0
 typing_extensions==4.13.2
+tzdata==2025.2
 urllib3==2.4.0
 uvicorn==0.34.2
 uvloop==0.21.0
